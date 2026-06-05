@@ -1,808 +1,300 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import 'package:permission_handler/permission_handler.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
-const String kBaseUrl         = 'https://sirdaba.delivery';
-const String kDeviceTokenUrl  = '$kBaseUrl/wp-json/sirdaba/v1/mobile/device-token';
-const String kMeUrl           = '$kBaseUrl/wp-json/sirdaba/v1/mobile/me';
-const String kAppVersion      = '1.0.0';
-const String kUserAgent       = 'SirDaba-App-Android-Agent/1.0';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// تُعرَّف هنا نصوص حالات الطلب بالعربية
-// ─────────────────────────────────────────────────────────────────────────────
-const Map<String, String> kStatusLabels = {
-  'pending':           'قيد الانتظار ⏳',
-  'pending_admin':     'بانتظار موافقة الإدارة 🕐',
-  'accepted':          'تم قبول طلبك ✅',
-  'picked_up':         'تم استلام الطرد 📦',
-  'on_the_way':        'الموزع في الطريق إليك 🚚',
-  'delivered':         'تم التسليم بنجاح 🎉',
-  'cancelled':         'تم إلغاء الطلب ❌',
-  'returned':          'تم إرجاع الطلب 🔄',
-  'dues_paid':         'تمت تسوية المستحقات 💰',
-  'paying_dues':       'جارٍ تسوية المستحقات 💳',
-};
-
-String _translateStatus(String status) {
-  return kStatusLabels[status] ?? status;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Background FCM handler – يجب أن يكون top-level function
-// ─────────────────────────────────────────────────────────────────────────────
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  debugPrint('[FCM] Background message: ${message.messageId}');
-  // يمكن هنا تحديث بيانات محلية إن احتجت
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// main
-// ─────────────────────────────────────────────────────────────────────────────
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+const AndroidNotificationChannel channel = AndroidNotificationChannel(
+  'sirdaba_high_importance', 'SirDaba Notifications',
+  description: 'اشعارات SirDaba', importance: Importance.max, playSound: true,
+);
+
+const String kSiteUrl        = 'https://sirdaba.delivery';
+const String kDistributorUrl = 'https://sirdaba.delivery/sirdaba-distributor';
+const String kClientUrl      = 'https://sirdaba.delivery/sirdaba-client';
+const String kHomeUrl        = 'https://sirdaba.delivery/';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  runApp(const SirdabaApp());
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+  await flutterLocalNotificationsPlugin.initialize(
+      const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(statusBarColor: Colors.transparent));
+  runApp(const SirDabaApp());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// App
-// ─────────────────────────────────────────────────────────────────────────────
-class SirdabaApp extends StatelessWidget {
-  const SirdabaApp({super.key});
-
+class SirDabaApp extends StatelessWidget {
+  const SirDabaApp({super.key});
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SirDaba Delivery',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1F8B4C),
-          primary: const Color(0xFF1F8B4C),
-          secondary: const Color(0xFFF28C1B),
-        ),
-        scaffoldBackgroundColor: Colors.black,
-        useMaterial3: true,
-      ),
-      home: const SirdabaWebViewPage(),
+      title: 'SirDaba', debugShowCheckedModeBanner: false,
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFE8821A))),
+      home: const SplashScreen(),
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main screen – WebView + FCM
-// ─────────────────────────────────────────────────────────────────────────────
-class SirdabaWebViewPage extends StatefulWidget {
-  const SirdabaWebViewPage({super.key});
-
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
   @override
-  State<SirdabaWebViewPage> createState() => _SirdabaWebViewPageState();
+  State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SirdabaWebViewPageState extends State<SirdabaWebViewPage>
-    with WidgetsBindingObserver {
-  InAppWebViewController? _controller;
-  double _progress    = 0;
-  bool   _isReady     = false;
-  bool   _isGpsDialogVisible = false;
-
-  String? _fcmToken;
-  bool?   _isDistributor; // null = غير معروف بعد
-
-  // ── إشعار Foreground يُعرض كـ Banner ──────────────────────────────────────
-  _FcmBannerData? _activeBanner;
-  Timer?          _bannerTimer;
-
-  static const Set<String> _allowedWebSchemes = {
-    'http', 'https', 'file', 'chrome', 'data', 'javascript', 'about',
-  };
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Lifecycle
-  // ───────────────────────────────────────────────────────────────────────────
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _scale, _fade;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    unawaited(_initializeAppServices());
+    _ctrl = AnimationController(duration: const Duration(milliseconds: 1200), vsync: this);
+    _scale = Tween<double>(begin: 0.6, end: 1.0).animate(CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
+    _fade  = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: _ctrl, curve: const Interval(0.0, 0.5, curve: Curves.easeIn)));
+    _ctrl.forward();
+    Future.wait([Future.delayed(const Duration(seconds: 2)), _checkSession()]).then((r) {
+      if (!mounted) return;
+      final s = r[1] as _SessionResult;
+      Navigator.of(context).pushReplacement(PageRouteBuilder(
+        pageBuilder: (_, __, ___) => MainWebViewScreen(initialUrl: s.startUrl),
+        transitionsBuilder: (_, a, __, c) => FadeTransition(opacity: a, child: c),
+        transitionDuration: const Duration(milliseconds: 400),
+      ));
+    });
+  }
+
+  Future<_SessionResult> _checkSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('app_token_backup') ?? '';
+    if (token.isEmpty) return _SessionResult(startUrl: kHomeUrl);
+    try {
+      final res = await http.get(Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status'),
+        headers: {'Authorization': 'Bearer $token',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent'})
+        .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final d = jsonDecode(res.body) as Map<String, dynamic>;
+        if (d['logged_in'] == true) {
+          final t = (d['sirdaba_user'] as Map?)?.get('type') ?? '';
+          return _SessionResult(startUrl: t == 'distributor' ? kDistributorUrl : kClientUrl);
+        }
+      } else if (res.statusCode == 401) {
+        await prefs.remove('app_token_backup');
+      }
+    } catch (_) {}
+    return _SessionResult(startUrl: kHomeUrl);
   }
 
   @override
-  void dispose() {
-    _bannerTimer?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
+  void dispose() { _ctrl.dispose(); super.dispose(); }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _isDistributor == true) {
-      unawaited(_checkGpsAvailability(showDialog: true));
+  Widget build(BuildContext context) {
+    return Scaffold(backgroundColor: Colors.white, body: Center(
+      child: AnimatedBuilder(animation: _ctrl, builder: (_, __) => FadeTransition(opacity: _fade,
+        child: ScaleTransition(scale: _scale, child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Image.asset('assets/images/logo.png', width: 260, height: 260, fit: BoxFit.contain),
+          const SizedBox(height: 32),
+          const Text('SirDaba Delivery', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Color(0xFFE8821A))),
+          const SizedBox(height: 8),
+          const Text('توصيل سريع وموثوق', style: TextStyle(fontSize: 14, color: Color(0xFF555555))),
+          const SizedBox(height: 48),
+          const CircularProgressIndicator(color: Color(0xFFE8821A), strokeWidth: 2.5),
+        ])))),
+    ));
+  }
+}
+
+class _SessionResult {
+  final String startUrl;
+  const _SessionResult({required this.startUrl});
+}
+
+extension _MapGet on Map {
+  dynamic get(String key) => this[key];
+}
+
+class MainWebViewScreen extends StatefulWidget {
+  final String initialUrl;
+  const MainWebViewScreen({super.key, this.initialUrl = kHomeUrl});
+  @override
+  State<MainWebViewScreen> createState() => _MainWebViewScreenState();
+}
+
+class _MainWebViewScreenState extends State<MainWebViewScreen> {
+  late final WebViewController _wvc;
+  bool _loading = true;
+  String? _fcmToken;
+  bool _tokenRegistered = false;
+
+  static const String _kReadCookieJs = '''
+(function(){var t='';var cs=document.cookie.split(';');for(var i=0;i<cs.length;i++){var c=cs[i].trim();if(c.startsWith('sirdaba_app_token=')){t=c.substring('sirdaba_app_token='.length);break;}}
+if(t){window.SirDabaFlutter.postMessage(JSON.stringify({type:'app_token',token:decodeURIComponent(t)}));}
+else{window.SirDabaFlutter.postMessage(JSON.stringify({type:'cookie_missing'}));}})();''';
+
+  String _autoFillJs(String email, String pass) {
+    final e = email.replaceAll("'", "\\'");
+    final p = pass.replaceAll("'", "\\'");
+    return """(function(){function f(){
+var em=document.querySelector('#sdClientLoginForm input[name="email"]');
+var pw=document.querySelector('#sdClientLoginForm input[name="password"]');
+if(em&&pw){em.value='$e';pw.value='$p';
+['input','change'].forEach(function(ev){em.dispatchEvent(new Event(ev,{bubbles:true}));pw.dispatchEvent(new Event(ev,{bubbles:true}));});}}
+if(document.readyState==='complete'){f();}else{window.addEventListener('load',f);}})();""";
+  }
+
+  static const String _kLoginInterceptorJs = """
+(function(){var form=document.querySelector('#sdClientLoginForm');
+if(!form||form._sd)return;form._sd=true;
+form.addEventListener('submit',function(){
+var em=form.querySelector('input[name="email"]');
+var pw=form.querySelector('input[name="password"]');
+if(em&&pw&&em.value&&pw.value){window.SirDabaFlutter.postMessage(JSON.stringify({type:'save_credentials',email:em.value,password:pw.value}));}
+},true);})();""";
+
+  @override
+  void initState() { super.initState(); _initWebView(); _initFCM(); }
+
+  void _initWebView() {
+    _wvc = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent('Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent')
+      ..addJavaScriptChannel('SirDabaFlutter', onMessageReceived: _onJsMessage)
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) => setState(() => _loading = true),
+        onPageFinished: _onPageFinished,
+        onWebResourceError: (_) => setState(() => _loading = false),
+      ))
+      ..loadRequest(Uri.parse(widget.initialUrl));
+  }
+
+  void _onPageFinished(String url) async {
+    setState(() => _loading = false);
+    final r = ui.PlatformDispatcher.instance.views.first;
+    final dp = r.padding.top / r.devicePixelRatio;
+    _wvc.runJavaScript("document.documentElement.style.setProperty('--sd-status-bar-height','${dp.toStringAsFixed(1)}px');");
+    _wvc.runJavaScript(_kReadCookieJs);
+    _wvc.runJavaScript(_kLoginInterceptorJs);
+    if (url.contains('sirdaba-client') || url.contains('sirdaba-distributor')) {
+      final prefs = await SharedPreferences.getInstance();
+      final em = prefs.getString('saved_email') ?? '';
+      final pw = prefs.getString('saved_password') ?? '';
+      if (em.isNotEmpty && pw.isNotEmpty) {
+        Future.delayed(const Duration(milliseconds: 600), () => _wvc.runJavaScript(_autoFillJs(em, pw)));
+      }
     }
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Initialisation
-  // ───────────────────────────────────────────────────────────────────────────
-
-  Future<void> _initializeAppServices() async {
-    await _requestStartupPermissions();
-    await _configureFCM();
-    if (!mounted) return;
-    setState(() => _isReady = true);
-  }
-
-  Future<void> _requestStartupPermissions() async {
-    await Permission.locationWhenInUse.request();
-    if (Platform.isIOS) {
-      await Permission.photos.request();
-      await Permission.camera.request();
-    } else if (Platform.isAndroid) {
-      await Permission.camera.request();
-      await Permission.storage.request();
-      await Permission.notification.request();
-    }
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Firebase Cloud Messaging — الجزء المُحدَّث والمُكتمل
-  // ───────────────────────────────────────────────────────────────────────────
-
-  Future<void> _configureFCM() async {
+  void _onJsMessage(JavaScriptMessage msg) async {
     try {
-      final messaging = FirebaseMessaging.instance;
-
-      // 1. طلب الإذن
-      final settings = await messaging.requestPermission(
-        alert:         true,
-        badge:         true,
-        sound:         true,
-        announcement:  false,
-        carPlay:       false,
-        criticalAlert: false,
-        provisional:   false,
-      );
-
-      debugPrint('[FCM] Permission: ${settings.authorizationStatus}');
-      if (settings.authorizationStatus == AuthorizationStatus.denied) return;
-
-      // 2. ضبط خيارات عرض iOS
-      await messaging.setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-
-      // 3. احضر التوكن وسجّله
-      final token = await messaging.getToken();
-      if (token != null && token.isNotEmpty) {
-        _fcmToken = token;
-        debugPrint('[FCM] Token: $token');
-        unawaited(_registerTokenWithBackend(token));
+      final d = jsonDecode(msg.message) as Map<String, dynamic>;
+      final type = d['type'] as String? ?? '';
+      if (type == 'app_token') {
+        final t = d['token'] as String? ?? '';
+        if (t.isNotEmpty) {
+          final p = await SharedPreferences.getInstance();
+          await p.setString('app_token_backup', t);
+          if (_fcmToken != null && !_tokenRegistered) _registerFcm(_fcmToken!, t);
+        }
+      } else if (type == 'save_credentials') {
+        final em = d['email'] as String? ?? '';
+        final pw = d['password'] as String? ?? '';
+        if (em.isNotEmpty && pw.isNotEmpty) {
+          final p = await SharedPreferences.getInstance();
+          await p.setString('saved_email', em);
+          await p.setString('saved_password', pw);
+        }
+      } else if (type == 'cookie_missing') {
+        final p = await SharedPreferences.getInstance();
+        final t = p.getString('app_token_backup') ?? '';
+        if (t.isEmpty) return;
+        try {
+          final res = await http.post(Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/set-app-token'),
+            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'token': t}));
+          if (res.statusCode == 200) { _wvc.reload(); }
+          else { await p.remove('app_token_backup'); }
+        } catch (_) {}
       }
-
-      // 4. تحديث تلقائي عند تجديد التوكن
-      messaging.onTokenRefresh.listen((newToken) {
-        _fcmToken = newToken;
-        debugPrint('[FCM] Token refreshed: $newToken');
-        unawaited(_registerTokenWithBackend(newToken));
-      });
-
-      // 5. معالجة الإشعارات حسب حالة التطبيق
-      FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-      FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationTap);
-
-      // 6. التطبيق فُتح من إشعار (كان مغلقاً تماماً)
-      final initial = await messaging.getInitialMessage();
-      if (initial != null) {
-        // تأخير بسيط حتى يكتمل بناء الـ Widget
-        await Future.delayed(const Duration(milliseconds: 500));
-        _handleNotificationTap(initial);
-      }
-    } catch (e) {
-      debugPrint('[FCM] Configuration error: $e');
-    }
+    } catch (_) {}
   }
 
-  /// تسجيل FCM Token في الـ WordPress backend
-  Future<void> _registerTokenWithBackend(String token) async {
-    if (token.isEmpty) return;
-    try {
-      final response = await http.post(
-        Uri.parse(kDeviceTokenUrl),
-        headers: {
-          'Content-Type':  'application/json',
-          'Accept':        'application/json',
-          'User-Agent':    kUserAgent,
-        },
-        body: jsonEncode({
-          'token':       token,
-          'platform':    Platform.isAndroid ? 'android' : 'ios',
-          'app_version': kAppVersion,
-        }),
-      ).timeout(const Duration(seconds: 15));
-      debugPrint('[FCM] Backend response: ${response.statusCode}');
-    } catch (e) {
-      debugPrint('[FCM] Backend registration error: $e');
-    }
-  }
-
-  /// إشعار وصل والتطبيق مفتوح في المقدمة ← يعرض Banner داخل التطبيق
-  void _handleForegroundMessage(RemoteMessage message) {
-    if (!mounted) return;
-
-    final notif  = message.notification;
-    final data   = message.data;
-
-    // استخرج العنوان والنص — يدعم كلاً من notification payload و data payload
-    final title  = notif?.title ?? data['title']?.toString() ?? 'SirDaba';
-    String body  = notif?.body  ?? data['body']?.toString()  ?? '';
-
-    // إذا كان إشعار حالة طلب، نُحسّن نص الجسم
-    if (data['type'] == 'order_status_update') {
-      final newStatus = data['new_status']?.toString() ?? '';
-      final orderRef  = data['order_ref']?.toString()  ?? data['order_id']?.toString() ?? '';
-      if (newStatus.isNotEmpty) {
-        body = 'طلب #$orderRef → ${_translateStatus(newStatus)}';
+  Future<void> _initFCM() async {
+    final m = FirebaseMessaging.instance;
+    await m.requestPermission(alert: true, badge: true, sound: true);
+    final t = await m.getToken();
+    if (t != null) await _handleNewToken(t);
+    m.onTokenRefresh.listen(_handleNewToken);
+    FirebaseMessaging.onMessage.listen((msg) {
+      final n = msg.notification; final a = n?.android;
+      if (n != null && a != null) {
+        flutterLocalNotificationsPlugin.show(n.hashCode, n.title, n.body,
+          NotificationDetails(android: AndroidNotificationDetails(channel.id, channel.name,
+            channelDescription: channel.description, importance: Importance.max,
+            priority: Priority.high, icon: '@mipmap/ic_launcher')));
       }
-    }
-
-    setState(() {
-      _activeBanner = _FcmBannerData(title: title, body: body, data: data);
     });
-
-    _bannerTimer?.cancel();
-    _bannerTimer = Timer(const Duration(seconds: 6), () {
-      if (mounted) setState(() => _activeBanner = null);
-    });
-
-    debugPrint('[FCM] Foreground: $title | $body');
+    FirebaseMessaging.onMessageOpenedApp.listen(_handleTap);
+    final init = await m.getInitialMessage();
+    if (init != null) _handleTap(init);
   }
 
-  /// المستخدم ضغط على الإشعار ← تنقّل داخل WebView
-  void _handleNotificationTap(RemoteMessage message) {
-    final data = message.data;
-    debugPrint('[FCM] Tap: $data');
-
-    // دعم launch_url المباشر
-    final launchUrl = data['launch_url']?.toString();
-    if (launchUrl != null && launchUrl.isNotEmpty) {
-      unawaited(_navigateWebViewTo(launchUrl));
-      return;
-    }
-
-    // دعم تنقل صفحة تفاصيل الطلب
-    final orderId = data['order_id']?.toString();
-    if (orderId != null && orderId.isNotEmpty) {
-      unawaited(_navigateWebViewTo('$kBaseUrl/?sirdaba_order_id=$orderId'));
-    }
+  Future<void> _handleNewToken(String t) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('fcm_token', t);
+    _fcmToken = t; _tokenRegistered = false;
+    try { await _wvc.runJavaScript("localStorage.setItem('fcm_token','$t');"); } catch (_) {}
+    try { await _wvc.runJavaScript(_kReadCookieJs); } catch (_) {}
   }
 
-  /// تنقّل WebView إلى رابط معين
-  Future<void> _navigateWebViewTo(String url) async {
-    if (_controller == null) return;
+  Future<void> _registerFcm(String fcm, String appToken) async {
     try {
-      await _controller!.loadUrl(
-        urlRequest: URLRequest(url: WebUri(url)),
-      );
-    } catch (e) {
-      debugPrint('[WebView] Navigate error: $e');
-    }
+      final p = await SharedPreferences.getInstance();
+      final old = p.getString('fcm_token_registered') ?? '';
+      final res = await http.post(Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/device-token'),
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $appToken'},
+        body: jsonEncode({'token': fcm, 'platform': 'android', 'app_version': '1.0.0',
+          if (old.isNotEmpty && old != fcm) 'old_token': old}));
+      if (res.statusCode == 200) { _tokenRegistered = true; await p.setString('fcm_token_registered', fcm); }
+    } catch (_) {}
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // User role detection
-  // ───────────────────────────────────────────────────────────────────────────
-
-  Future<bool> _fetchIsDistributor() async {
-    try {
-      final response = await http.get(
-        Uri.parse(kMeUrl),
-        headers: {
-          'Accept':     'application/json',
-          'User-Agent': kUserAgent,
-        },
-      ).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        final body     = jsonDecode(response.body);
-        final userType = body['data']?['user_type']?.toString() ?? '';
-        return userType == 'distributor';
-      }
-    } catch (e) {
-      debugPrint('[Me] Error: $e');
-    }
-    return false;
+  void _handleTap(RemoteMessage msg) {
+    final url = msg.data['url'] ?? msg.data['link'];
+    if (url != null) _wvc.loadRequest(Uri.parse(url));
   }
 
-  Future<void> _onPageLoaded(Uri? uri) async {
-    // إعادة تسجيل التوكن بعد كل تحميل (يغطي حالة ما بعد الـ login)
-    if (_fcmToken != null && _fcmToken!.isNotEmpty) {
-      unawaited(_registerTokenWithBackend(_fcmToken!));
-    }
-
-    final isDistributor = await _fetchIsDistributor();
-    if (_isDistributor != isDistributor) {
-      _isDistributor = isDistributor;
-      debugPrint('[Role] isDistributor = $isDistributor');
-    }
-
-    if (_isDistributor == true) {
-      unawaited(_checkGpsAvailability(showDialog: true));
-    }
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // GPS helpers
-  // ───────────────────────────────────────────────────────────────────────────
-
-  Future<bool> _checkGpsAvailability({bool showDialog = false}) async {
-    try {
-      final isEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!isEnabled && showDialog && _isDistributor == true) {
-        await _showGpsDisabledDialog();
-      }
-      return isEnabled;
-    } catch (_) {
-      return true;
-    }
-  }
-
-  Future<void> _showGpsDisabledDialog() async {
-    if (!mounted || _isGpsDialogVisible) return;
-    _isGpsDialogVisible = true;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (ctx) => AlertDialog(
-        title: const Text('GPS غير مفعّل'),
-        content: const Text(
-          'يرجى تفعيل الـ GPS لمشاركة موقعك مع العملاء واستخدام خرائط التوصيل.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('لاحقاً'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              Navigator.of(ctx).pop();
-              await Geolocator.openLocationSettings();
-            },
-            child: const Text('تفعيل GPS'),
-          ),
-        ],
-      ),
-    );
-    _isGpsDialogVisible = false;
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Navigation helpers
-  // ───────────────────────────────────────────────────────────────────────────
-
-  Future<bool> _openOutsideWebView(String rawUrl) async {
-    final uri = Uri.tryParse(rawUrl);
-    if (uri == null) return false;
-
-    if (_isLikelyGoogleMapsLink(rawUrl, uri)) {
-      final gpsEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!gpsEnabled) {
-        if (_isDistributor == true) await _showGpsDisabledDialog();
-        return false;
-      }
-      return _openGoogleMaps(rawUrl);
-    }
-
-    Uri targetUri = uri;
-    if (uri.scheme == 'intent') targetUri = _extractUriFromIntent(rawUrl) ?? uri;
-
-    final launched = await _tryLaunch(targetUri);
-    if (launched) return true;
-
-    if (uri.scheme == 'intent') {
-      final fallback = _extractBrowserFallbackUri(rawUrl);
-      if (fallback != null) return _tryLaunch(fallback);
-    }
-    return false;
-  }
-
-  bool _isLikelyGoogleMapsLink(String rawUrl, Uri uri) {
-    final n = rawUrl.toLowerCase();
-    final h = uri.host.toLowerCase();
-    final p = uri.path.toLowerCase();
-    if ({'geo', 'google.navigation', 'comgooglemaps'}.contains(uri.scheme)) return true;
-    if (n.startsWith('intent://') && n.contains('google.com/maps')) return true;
-    if (h.contains('maps.app.goo.gl')) return true;
-    if (h.contains('google.') && p.startsWith('/maps')) return true;
-    return false;
-  }
-
-  Uri? _extractUriFromIntent(String rawUrl) {
-    if (!rawUrl.toLowerCase().startsWith('intent://')) return Uri.tryParse(rawUrl);
-    final sep  = rawUrl.indexOf('#Intent;');
-    final body = (sep == -1 ? rawUrl : rawUrl.substring(0, sep)).substring('intent://'.length);
-    final scheme = _parseIntentMetadata(rawUrl)['scheme'] ?? 'https';
-    return Uri.tryParse('$scheme://$body');
-  }
-
-  Uri? _extractBrowserFallbackUri(String rawUrl) {
-    final fallback = _parseIntentMetadata(rawUrl)['S.browser_fallback_url'];
-    if (fallback == null || fallback.isEmpty) return null;
-    return Uri.tryParse(Uri.decodeComponent(fallback));
-  }
-
-  Map<String, String> _parseIntentMetadata(String rawUrl) {
-    final sep = rawUrl.indexOf('#Intent;');
-    if (sep == -1) return const {};
-    final meta = <String, String>{};
-    for (final e in rawUrl.substring(sep + 8).split(';')) {
-      if (e.isEmpty || e == 'end') continue;
-      final eq = e.indexOf('=');
-      if (eq <= 0) continue;
-      meta[e.substring(0, eq)] = e.substring(eq + 1);
-    }
-    return meta;
-  }
-
-  Future<bool> _openGoogleMaps(String rawUrl) async {
-    final incomingUri = _extractUriFromIntent(rawUrl) ?? Uri.tryParse(rawUrl);
-    if (incomingUri == null) return false;
-
-    final params = incomingUri.queryParameters;
-    final dest   = params['destination'] ?? params['daddr'] ?? params['q'];
-    final origin = params['origin'] ?? params['saddr'];
-    final mode   = _mapTravelMode(params['travelmode'] ?? params['directionsmode']);
-
-    if (Platform.isAndroid && dest != null && dest.isNotEmpty) {
-      final navUri = Uri.parse(
-        'google.navigation:q=${Uri.encodeComponent(dest)}${mode == null ? '' : '&mode=$mode'}',
-      );
-      if (await _tryLaunch(navUri)) return true;
-    }
-
-    if (Platform.isIOS && dest != null && dest.isNotEmpty) {
-      final q = <String, String>{'daddr': dest};
-      if (origin != null && origin.isNotEmpty) q['saddr'] = origin;
-      final dm = _mapIosTravelMode(params['travelmode'] ?? params['directionsmode']);
-      if (dm != null) q['directionsmode'] = dm;
-      if (await _tryLaunch(Uri.parse('comgooglemaps://?${Uri(queryParameters: q).query}'))) return true;
-    }
-
-    final fallback = _extractBrowserFallbackUri(rawUrl);
-    if (fallback != null && await _tryLaunch(fallback)) return true;
-    return _tryLaunch(incomingUri);
-  }
-
-  String? _mapTravelMode(String? m) {
-    switch (m?.toLowerCase()) {
-      case 'driving':   return 'd';
-      case 'walking':   return 'w';
-      case 'bicycling': return 'b';
-      default:          return null;
-    }
-  }
-
-  String? _mapIosTravelMode(String? m) {
-    switch (m?.toLowerCase()) {
-      case 'driving': case 'walking': case 'transit': case 'bicycling':
-        return m!.toLowerCase();
-      default: return null;
-    }
-  }
-
-  Future<bool> _tryLaunch(Uri uri) async {
-    try {
-      return await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<void> _handleDownload(Uri uri) async {
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم إرسال الملف لتطبيق التنزيل.')),
-    );
-  }
-
-  Future<void> _showPermissionNotice(String msg) async {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  Future<bool> _handleNavigationInterception(String rawUrl) async {
-    final uri = Uri.tryParse(rawUrl);
-    if (uri == null) return false;
-
-    if (_isLikelyGoogleMapsLink(rawUrl, uri)) {
-      final gpsEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!gpsEnabled) {
-        if (_isDistributor == true) await _showGpsDisabledDialog();
-        return true;
-      }
-      final launched = await _openGoogleMaps(rawUrl);
-      if (!launched && mounted) await _showPermissionNotice('تعذر فتح Google Maps.');
-      return launched || (uri.scheme != 'http' && uri.scheme != 'https');
-    }
-
-    if (!_allowedWebSchemes.contains(uri.scheme)) {
-      final launched = await _openOutsideWebView(rawUrl);
-      if (!launched && mounted) await _showPermissionNotice('تعذر فتح الرابط الخارجي.');
-      return true;
-    }
-
-    return false;
-  }
-
-  Future<bool> _onWillPop() async {
-    if (_controller != null && await _controller!.canGoBack()) {
-      await _controller!.goBack();
-      return false;
-    }
+  Future<bool> _onBack() async {
+    if (await _wvc.canGoBack()) { _wvc.goBack(); return false; }
     return true;
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Build
-  // ───────────────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _onWillPop,
-      child: Scaffold(
-        body: SafeArea(
-          child: Stack(
-            children: [
-              // ── WebView + progress bar ──────────────────────────────────
-              Column(
-                children: [
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: _progress < 1
-                        ? LinearProgressIndicator(
-                            key: const ValueKey('progress'),
-                            value: _progress == 0 ? null : _progress,
-                            minHeight: 3,
-                            backgroundColor: Colors.white10,
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                              Color(0xFFF28C1B),
-                            ),
-                          )
-                        : const SizedBox(
-                            key: ValueKey('progress-hidden'),
-                            height: 3,
-                          ),
-                  ),
-                  Expanded(
-                    child: InAppWebView(
-                      initialUrlRequest: URLRequest(url: WebUri(kBaseUrl)),
-                      initialSettings: InAppWebViewSettings(
-                        javaScriptEnabled: true,
-                        javaScriptCanOpenWindowsAutomatically: true,
-                        domStorageEnabled: true,
-                        databaseEnabled: true,
-                        allowFileAccess: true,
-                        allowContentAccess: true,
-                        geolocationEnabled: true,
-                        mediaPlaybackRequiresUserGesture: false,
-                        allowsInlineMediaPlayback: true,
-                        transparentBackground: false,
-                        supportZoom: false,
-                        useShouldOverrideUrlLoading: true,
-                        useOnDownloadStart: true,
-                        userAgent: kUserAgent,
-                      ),
-                      onWebViewCreated:  (c) => _controller = c,
-                      onProgressChanged: (_, p) {
-                        if (!mounted) return;
-                        setState(() => _progress = p / 100);
-                      },
-                      onLoadStart: (_, __) {
-                        if (!mounted) return;
-                        setState(() => _progress = 0);
-                      },
-                      onLoadStop: (_, uri) {
-                        if (!mounted) return;
-                        setState(() => _progress = 1);
-                        unawaited(_onPageLoaded(uri));
-                      },
-                      onCreateWindow: (controller, action) async {
-                        final raw = action.request.url?.toString();
-                        if (raw != null && await _handleNavigationInterception(raw)) return false;
-                        if (action.request.url != null) {
-                          await controller.loadUrl(urlRequest: action.request);
-                        }
-                        return true;
-                      },
-                      shouldOverrideUrlLoading: (_, nav) async {
-                        final raw = nav.request.url?.toString() ?? '';
-                        if (raw.isEmpty) return NavigationActionPolicy.ALLOW;
-                        if (await _handleNavigationInterception(raw)) {
-                          return NavigationActionPolicy.CANCEL;
-                        }
-                        return NavigationActionPolicy.ALLOW;
-                      },
-                      onPermissionRequest: (_, req) async => PermissionResponse(
-                        action: PermissionResponseAction.GRANT,
-                        resources: req.resources,
-                      ),
-                      onGeolocationPermissionsShowPrompt: (_, origin) async {
-                        if (_isDistributor != true) {
-                          return GeolocationPermissionShowPromptResponse(
-                            origin: origin, allow: false, retain: false,
-                          );
-                        }
-                        final gpsEnabled = await Geolocator.isLocationServiceEnabled();
-                        if (!gpsEnabled) {
-                          await _showGpsDisabledDialog();
-                          return GeolocationPermissionShowPromptResponse(
-                            origin: origin, allow: false, retain: false,
-                          );
-                        }
-                        final status  = await Permission.locationWhenInUse.request();
-                        final allowed = status.isGranted || status.isLimited;
-                        if (!allowed) {
-                          await _showPermissionNotice(
-                            'يرجى السماح بالموقع لتفعيل خرائط التوصيل.',
-                          );
-                        }
-                        return GeolocationPermissionShowPromptResponse(
-                          origin: origin, allow: allowed, retain: true,
-                        );
-                      },
-                      onDownloadStartRequest: (_, req) async {
-                        final uri = Uri.tryParse(req.url.toString());
-                        if (uri != null) await _handleDownload(uri);
-                      },
-                      onReceivedError: (_, req, err) async {
-                        if (req.isForMainFrame == true) {
-                          await _showPermissionNotice(
-                            'تعذر تحميل الصفحة: ${err.description}',
-                          );
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-
-              // ── Splash أثناء التهيئة ───────────────────────────────────
-              if (!_isReady)
-                const Positioned.fill(
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        color: Color(0xFFF28C1B),
-                      ),
-                    ),
-                  ),
-                ),
-
-              // ── FCM Foreground Banner ──────────────────────────────────
-              if (_activeBanner != null)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: _FcmBanner(
-                    data: _activeBanner!,
-                    onTap: () {
-                      _handleNotificationTap(
-                        RemoteMessage(data: _activeBanner!.data),
-                      );
-                      setState(() => _activeBanner = null);
-                    },
-                    onDismiss: () => setState(() => _activeBanner = null),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// FCM Banner widget — يظهر عند وصول إشعار والتطبيق مفتوح
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _FcmBannerData {
-  final String              title;
-  final String              body;
-  final Map<String, dynamic> data;
-  const _FcmBannerData({required this.title, required this.body, required this.data});
-}
-
-class _FcmBanner extends StatelessWidget {
-  const _FcmBanner({
-    required this.data,
-    required this.onTap,
-    required this.onDismiss,
-  });
-
-  final _FcmBannerData data;
-  final VoidCallback   onTap;
-  final VoidCallback   onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          margin: const EdgeInsets.all(10),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1F8B4C),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3)),
-            ],
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.notifications, color: Colors.white, size: 22),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      data.title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (data.body.isNotEmpty)
-                      Text(
-                        data.body,
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                  ],
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white70, size: 18),
-                onPressed: onDismiss,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    return WillPopScope(onWillPop: _onBack, child: Scaffold(
+      backgroundColor: Colors.white,
+      body: Stack(children: [
+        WebViewWidget(controller: _wvc),
+        if (_loading) Container(color: Colors.white,
+          child: const Center(child: CircularProgressIndicator(color: Color(0xFFE8821A), strokeWidth: 2.5))),
+      ]),
+    ));
   }
 }
