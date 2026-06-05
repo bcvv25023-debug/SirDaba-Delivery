@@ -5,15 +5,6 @@ plugins {
     id "com.google.gms.google-services"
 }
 
-// ── قراءة key.properties إذا موجود ──────────────────────────────────────────
-def keystorePropertiesFile = rootProject.file("key.properties")
-def keystoreProperties = new Properties()
-def hasKeystore = false
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-    hasKeystore = true
-}
-
 android {
     namespace "com.sirdaba.sirdaba_delivery"
     compileSdk 34
@@ -22,25 +13,14 @@ android {
         applicationId "com.sirdaba.sirdaba_delivery"
         minSdk 21
         targetSdk 34
-        versionCode flutter.versionCode
-        versionName flutter.versionName
+        versionCode 1
+        versionName "1.0.0"
         multiDexEnabled true
-    }
-
-    signingConfigs {
-        if (hasKeystore) {
-            release {
-                storeFile file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias keystoreProperties['keyAlias']
-                keyPassword keystoreProperties['keyPassword']
-            }
-        }
     }
 
     buildTypes {
         release {
-            signingConfig hasKeystore ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.debug
             minifyEnabled false
             shrinkResources false
         }
