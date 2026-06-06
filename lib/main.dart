@@ -37,8 +37,12 @@ Future<void> main() async {
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
-  await flutterLocalNotificationsPlugin.initialize(const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+  await flutterLocalNotificationsPlugin.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+    onDidReceiveNotificationResponse: (details) {},
+  );
   SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(statusBarColor: Colors.transparent));
   runApp(const SirDabaApp());
@@ -91,13 +95,15 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       try {
         final res = await http.get(
           Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status'),
-          headers: {'Authorization': 'Bearer $token',
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent'},
+          headers: {
+            'Authorization': 'Bearer $token',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent',
+          },
         ).timeout(const Duration(seconds: 8));
         if (res.statusCode == 200) {
           final d = jsonDecode(res.body) as Map<String, dynamic>;
           if (d['logged_in'] == true) {
-            final t = ((d['sirdaba_user'] as Map?)??{})['type'] as String? ?? '';
+            final t = ((d['sirdaba_user'] as Map?) ?? {})['type'] as String? ?? '';
             return _SessionResult(startUrl: t == 'distributor' ? kDistributorUrl : kClientUrl);
           }
         }
@@ -172,6 +178,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         onPageStarted: (_) => setState(() => _loading = true),
         onPageFinished: _onFinished,
         onWebResourceError: (_) => setState(() => _loading = false),
+        onPermissionRequest: (request) async {
+          await request.grant();
+        },
         onNavigationRequest: (request) async {
           final url = request.url;
           if (url.startsWith('intent://') ||
@@ -234,8 +243,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         final t = p.getString('app_token_backup') ?? '';
         if (t.isEmpty) return;
         try {
-          final res = await http.post(Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/set-app-token'),
-            headers: {'Content-Type': 'application/json'}, body: jsonEncode({'token': t}));
+          final res = await http.post(
+            Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/set-app-token'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'token': t}),
+          );
           if (res.statusCode == 200) { _wvc.reload(); } else { await p.remove('app_token_backup'); }
         } catch (_) {}
       }
@@ -245,16 +257,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   Future<void> _initFCM() async {
     final m = FirebaseMessaging.instance;
     await m.requestPermission(alert: true, badge: true, sound: true);
+    await m.setForegroundNotificationPresentationOptions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
     final t = await m.getToken();
     if (t != null) await _newToken(t);
     m.onTokenRefresh.listen(_newToken);
     FirebaseMessaging.onMessage.listen((msg) {
-      final n = msg.notification; final a = n?.android;
+      final n = msg.notification;
+      final a = n?.android;
       if (n != null && a != null) {
-        flutterLocalNotificationsPlugin.show(n.hashCode, n.title, n.body,
-          NotificationDetails(android: AndroidNotificationDetails(channel.id, channel.name,
-            channelDescription: channel.description, importance: Importance.max,
-            priority: Priority.high, icon: '@mipmap/ic_launcher')));
+        flutterLocalNotificationsPlugin.show(
+          n.hashCode, n.title, n.body,
+          NotificationDetails(android: AndroidNotificationDetails(
+            channel.id, channel.name,
+            channelDescription: channel.description,
+            importance: Importance.max,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+          )),
+        );
       }
     });
     FirebaseMessaging.onMessageOpenedApp.listen(_tap);
@@ -265,20 +289,34 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   Future<void> _newToken(String t) async {
     final p = await SharedPreferences.getInstance();
     await p.setString('fcm_token', t);
-    _fcmToken = t; _tokenRegistered = false;
+    _fcmToken = t;
+    _tokenRegistered = false;
     try { await _wvc.runJavaScript("localStorage.setItem('fcm_token','$t');"); } catch (_) {}
     try { await _wvc.runJavaScript(_kReadCookieJs); } catch (_) {}
+    final authTok = p.getString('app_token_backup') ?? '';
+    _registerFcm(t, authTok);
   }
 
   Future<void> _registerFcm(String fcm, String tok) async {
     try {
       final p = await SharedPreferences.getInstance();
       final old = p.getString('fcm_token_registered') ?? '';
-      final res = await http.post(Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/device-token'),
-        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $tok'},
-        body: jsonEncode({'token': fcm, 'platform': 'android', 'app_version': '1.0.0',
-          if (old.isNotEmpty && old != fcm) 'old_token': old}));
-      if (res.statusCode == 200) { _tokenRegistered = true; await p.setString('fcm_token_registered', fcm); }
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (tok.isNotEmpty) headers['Authorization'] = 'Bearer $tok';
+      final res = await http.post(
+        Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/device-token'),
+        headers: headers,
+        body: jsonEncode({
+          'token': fcm,
+          'platform': 'android',
+          'app_version': '1.0.0',
+          if (old.isNotEmpty && old != fcm) 'old_token': old,
+        }),
+      );
+      if (res.statusCode == 200) {
+        _tokenRegistered = true;
+        await p.setString('fcm_token_registered', fcm);
+      }
     } catch (_) {}
   }
 
@@ -304,5 +342,3 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     ));
   }
 }
-
-// هذا ما تزيدوش، الملف كامل بالفعل
