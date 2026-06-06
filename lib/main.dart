@@ -178,9 +178,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         onPageStarted: (_) => setState(() => _loading = true),
         onPageFinished: _onFinished,
         onWebResourceError: (_) => setState(() => _loading = false),
-        onPermissionRequest: (request) async {
-          await request.grant();
-        },
         onNavigationRequest: (request) async {
           final url = request.url;
           if (url.startsWith('intent://') ||
