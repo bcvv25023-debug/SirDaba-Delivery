@@ -9,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -171,6 +172,25 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         onPageStarted: (_) => setState(() => _loading = true),
         onPageFinished: _onFinished,
         onWebResourceError: (_) => setState(() => _loading = false),
+        onNavigationRequest: (request) async {
+          final url = request.url;
+          if (url.startsWith('intent://') ||
+              url.startsWith('geo:') ||
+              url.startsWith('tel:') ||
+              url.startsWith('whatsapp:') ||
+              (!url.contains('sirdaba.delivery') && url.contains('google.com/maps'))) {
+            String targetUrl = url;
+            if (url.startsWith('intent://')) {
+              targetUrl = 'https://' + url.substring(9).split(';').first;
+            }
+            final uri = Uri.parse(targetUrl);
+            if (await canLaunchUrl(uri)) {
+              await launchUrl(uri, mode: LaunchMode.externalApplication);
+            }
+            return NavigationDecision.prevent;
+          }
+          return NavigationDecision.navigate;
+        },
       ))
       ..loadRequest(Uri.parse(widget.initialUrl));
   }
